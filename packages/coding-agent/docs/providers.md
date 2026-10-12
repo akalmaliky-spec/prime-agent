@@ -19,7 +19,7 @@ Use `/login` in interactive mode, then select a provider:
 - Claude Pro/Max
 - GitHub Copilot
 
-Use `/logout` to clear credentials. Tokens are stored in `~/.prime/agent/auth.json` and auto-refresh when expired.
+Use `/logout` to remove stored credentials locally. Tokens are stored in `~/.prime/agent/auth.json` and auto-refresh when expired. This storage logout does not revoke tokens at the provider; revoke them through the provider if they may have been copied. Environment credentials remain available until they are unset; Prime Inference also clears the enabled Prime CLI credential configuration on logout.
 
 ### OpenAI Codex
 
@@ -97,7 +97,7 @@ Store credentials in `~/.prime/agent/auth.json`:
 }
 ```
 
-The file is created with `0600` permissions (user read/write only). Auth file credentials take priority over environment variables.
+The storage backend applies `0600` file permissions (user read/write only) and creates its directory with `0700` where supported. Literal API keys and OAuth access/refresh tokens are JSON values, not encrypted at rest. Keep the file out of source control and shared backups. Auth file credentials take priority over environment variables for most providers; Prime Inference has the exception described in [Resolution Order](#resolution-order).
 
 ### Key Resolution
 
@@ -121,7 +121,7 @@ OAuth credentials are also stored here after `/login` and managed automatically.
 
 ### Prime Inference
 
-Prime Inference uses the OpenAI-compatible endpoint at `https://api.pinference.ai/api/v1`. Set `PRIME_API_KEY` or store an API key for `prime-inference` via `/login`.
+Prime Inference uses the OpenAI-compatible endpoint at `https://api.pinference.ai/api/v1`. Set `PRIME_API_KEY` or store an API key for `prime-inference` via `/login`. When enabled, the integration also reads `~/.prime/config.json`. Its browser login creates an RSA key pair, submits the public key for a challenge, polls with a separate status bearer token, and decrypts the delivered API key with the private key before checking inference access. This returns an API key, not an automatically refreshed OAuth access/refresh pair.
 
 ## Cloud Providers
 
@@ -239,9 +239,16 @@ Or set `GOOGLE_APPLICATION_CREDENTIALS` to a service account key file.
 
 ## Resolution Order
 
-When resolving credentials for a provider:
+Eligible, non-stale credentials are resolved in this order:
 
-1. CLI `--api-key` flag
-2. `auth.json` entry (API key or OAuth token)
-3. Environment variable
-4. Custom provider keys from `models.json`
+| Priority | Most providers | Prime Inference |
+| --- | --- | --- |
+| 1 | Runtime override (`--api-key`) | Runtime override (`--api-key`) |
+| 2 | `auth.json` API key or OAuth token | Environment (`PRIME_API_KEY`) |
+| 3 | Environment credential | Enabled Prime CLI config (`~/.prime/config.json`) |
+| 4 | Custom-provider fallback (`models.json`) | `auth.json` |
+| 5 | — | Custom-provider fallback |
+
+Expired OAuth credentials refresh under a storage lock. The backend re-reads the file inside that lock so concurrent processes reuse a token another process already refreshed. Successful refresh saves the new credentials; failed refresh returns no credential for that provider and preserves stored state for retry/login. Providers select the actual authentication header; an OAuth token and an API key are not interchangeable across providers.
+
+Implementation: [`auth-storage.ts`](../src/core/auth-storage.ts) and [`prime-inference-auth.ts`](../src/core/prime-inference-auth.ts).
